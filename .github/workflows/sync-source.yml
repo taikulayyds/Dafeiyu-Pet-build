@@ -1,0 +1,42 @@
+name: Sync source and build
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */12 * * *'
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: source-sync
+  cancel-in-progress: false
+
+jobs:
+  dispatch-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve latest source commit
+        id: source
+        uses: actions/checkout@v4
+        with:
+          repository: taikulayyds/Dafeiyu-Pet
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Skip if source SHA already dispatched
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.commit }}
+        run: gh release view "source-sync-$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 1 || true
+      - name: Dispatch existing build workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.commit }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_ref="$SOURCE_SHA"

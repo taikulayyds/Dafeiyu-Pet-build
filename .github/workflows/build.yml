@@ -1,0 +1,81 @@
+name: Build Dafeiyu Pet DEB
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [rootless, roothide]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select an installed Xcode and discover SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d /Applications/Xcode_15.4.app ]; then
+            sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          elif [ -d /Applications/Xcode_16.4.app ]; then
+            sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          else
+            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          fi
+          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          test -d "$SDK_PATH"
+          echo "DAFEIYU_PET_SDK=$SDK_VERSION" >> "$GITHUB_ENV"
+          echo "DAFEIYU_PET_SDK_PATH=$SDK_PATH" >> "$GITHUB_ENV"
+          xcodebuild -version
+          xcrun clang --version
+          echo "Using iPhoneOS SDK $SDK_VERSION at $SDK_PATH"
+      - name: Install build dependencies
+        run: brew install make ldid dpkg
+      - name: Checkout pinned Theos and submodules
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          if [ "$VARIANT" = roothide ]; then
+            repo=https://github.com/roothide/theos.git
+            ref=958fea4f779943505b15b93c88bb4db8d97b346d
+          else
+            repo=https://github.com/theos/theos.git
+            ref=304e0799973e8145f32e4ca2de6c747a84b758ce
+          fi
+          git clone "$repo" "$HOME/theos"
+          git -C "$HOME/theos" checkout "$ref"
+          git -C "$HOME/theos" submodule update --init --recursive
+          mkdir -p "$HOME/theos/sdks"
+          ln -s "$DAFEIYU_PET_SDK_PATH" "$HOME/theos/sdks/iPhoneOS${DAFEIYU_PET_SDK}.sdk"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Validate source resources
+        run: python3 scripts/check_sources.py
+      - name: Regress optional dictation callback superclass ABIs
+        run: python3 scripts/check_dictation_runtime.py
+      - name: Regress production voice intent and record-limit timers
+        run: python3 scripts/check_voice_intent.py
+      - name: Exercise production AI protocols and transport guards
+        run: bash scripts/check_ai_network.sh
+      - name: Exercise production physics and music events
+        run: |
+          sh scripts/check_physics.sh
+          python3 scripts/check_physics_sources.py
+      - name: Build and verify real Mach-O slices
+        run: sh build.sh '${{ matrix.variant }}'
+      - name: Inspect package
+        run: |
+          for deb in packages/*.deb; do
+            dpkg-deb -I "$deb"
+            dpkg-deb -c "$deb"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dafeiyu-Pet-${{ matrix.variant }}
+          path: packages/*.deb
+          if-no-files-found: error

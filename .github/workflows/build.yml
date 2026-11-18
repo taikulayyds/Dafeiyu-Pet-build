@@ -1,9 +1,13 @@
 name: Build Dafeiyu Pet DEB
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Private repository ref to build'
+        required: false
+        default: 'main'
+        type: string
 permissions:
   contents: read
 jobs:
@@ -14,7 +18,13 @@ jobs:
       matrix:
         variant: [rootless, roothide]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout private source repository
+        uses: actions/checkout@v4
+        with:
+          repository: taikulayyds/Dafeiyu-Pet
+          ref: ${{ inputs.source_ref || 'main' }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          persist-credentials: false
       - name: Select an installed Xcode and discover SDK
         shell: bash
         run: |
@@ -74,8 +84,15 @@ jobs:
             dpkg-deb -I "$deb"
             dpkg-deb -c "$deb"
           done
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Dafeiyu-Pet-${{ matrix.variant }}
-          path: packages/*.deb
-          if-no-files-found: error
+      - name: Upload package to private source release
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN}"
+          tag="actions-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          gh release view "$tag" --repo taikulayyds/Dafeiyu-Pet >/dev/null 2>&1 || \
+            gh release create "$tag" --repo taikulayyds/Dafeiyu-Pet \
+              --title "Actions build $GITHUB_RUN_NUMBER" --notes "Built from $GITHUB_SHA ($VARIANT)"
+          gh release upload "$tag" packages/*.deb --repo taikulayyds/Dafeiyu-Pet --clobber
